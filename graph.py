@@ -159,6 +159,7 @@ def main():
     p.add_argument("--compare", help="CSV da segunda politica para sobrepor (modo comparacao)")
     p.add_argument("--label1", default="P1")
     p.add_argument("--label2", default="P2")
+    p.add_argument("--no-jitter", action="store_true", help="nao gerar o grafico de jitter")
     p.add_argument("-d", "--outdir", default=".")
     args = p.parse_args()
 
@@ -177,13 +178,15 @@ def main():
                         os.path.join(args.outdir, "compare_quality.png"))
         compare_buffer(rows, rows2, args.label1, args.label2,
                        os.path.join(args.outdir, "compare_buffer.png"))
-        compare_jitter(rows, rows2, args.label1, args.label2,
-                       os.path.join(args.outdir, "compare_jitter.png"))
+        if not args.no_jitter:
+            compare_jitter(rows, rows2, args.label1, args.label2,
+                           os.path.join(args.outdir, "compare_jitter.png"))
         return 0
 
     plot_throughput_quality(rows, os.path.join(args.outdir, "throughput_quality.png"))
     plot_buffer(rows, os.path.join(args.outdir, "buffer_level.png"))
-    plot_jitter(rows, os.path.join(args.outdir, "jitter.png"))
+    if not args.no_jitter:
+        plot_jitter(rows, os.path.join(args.outdir, "jitter.png"))
     return 0
 
 if __name__ == "__main__":

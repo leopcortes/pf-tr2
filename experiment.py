@@ -1,14 +1,13 @@
-"""Orquestrador dos experimentos da Entrega 2 (abordagem hibrida).
+"""Orquestrador dos experimentos da Entrega 2.
 
-Tres cenarios:
-  real        P1 vs P2 no servidor real da disciplina (rede estavel -> politicas
-              praticamente equivalentes; serve de referencia "dado real").
+Dois cenarios:
   controlled  P1 vs P2 no mock com banda variavel -> a deficiencia (oscilacao)
               aparece e a P2 (histerese) a resolve. E a comparacao que prova o ponto.
   failover    derruba o servidor A (mock) no meio do streaming -> failover p/ B.
               So da pra fazer num servidor que controlamos (o real nao e killable).
 
-Saida em results/{real,controlled}/{p1,p2,compare}/ e results/failover/.
+(P1 no servidor real, rede estavel, esta em results/baseline/ - Entrega 1.)
+Saida em results/controlled/ e results/failover/.
 Rode com o python do venv (matplotlib): .venv/bin/python experiment.py
 """
 import argparse
@@ -42,7 +41,7 @@ def wait_healthy(url, timeout=8):
 
 
 def start_server(port, port_a, port_b, bandwidth, jitter, profile, bw_noise=0.0, seed=42):
-    cmd = [PY, "server.py", "--id", "A" if port == port_a else "srv-B",
+    cmd = [PY, "server.py", "--id", "A" if port == port_a else "B",
            "--host", HOST, "--port", str(port), "--port-a", str(port_a),
            "--port-b", str(port_b), "--bandwidth", str(bandwidth),
            "--jitter", str(jitter), "--bw-noise", str(bw_noise), "--seed", str(seed)]
@@ -109,59 +108,31 @@ def graphs(outdir, *args):
     subprocess.run([PY, "graph.py", *args, "-d", outdir], check=True)
 
 
-def csvp(d):
-    return os.path.join(d, "metrics.csv")
-
-
-def scen_dirs(outdir, name):
-    """Cria results/<name>/{p1,p2,compare} e devolve os caminhos."""
-    dirs = {sub: os.path.join(outdir, name, sub) for sub in ("p1", "p2", "compare")}
-    for d in dirs.values():
-        os.makedirs(d, exist_ok=True)
-    return dirs
-
-
-def compare_pair(dirs, l1, l2, header):
-    """Gera graficos individuais de P1/P2, imprime a tabela e o overlay."""
-    c1, c2 = csvp(dirs["p1"]), csvp(dirs["p2"])
-    graphs(dirs["p1"], "-i", c1)
-    graphs(dirs["p2"], "-i", c2)
-    print(f"\n=== Comparacao P1 vs P2 ({header}) ===")
-    print_table(metrics(load(c1)), metrics(load(c2)), l1, l2)
-    graphs(dirs["compare"], "-i", c1, "--compare", c2, "--label1", l1, "--label2", l2)
-
-
 def run_controlled(args):
     """P1 vs P2 no mock com banda variavel: aqui a deficiencia (oscilacao) aparece."""
     print(f"\n### CONTROLADO (mock) | profile={args.profile} bw_noise={args.bw_noise}")
-    dirs = args.controlled
-    for policy in ("p1", "p2"):
+    d = args.dir_controlled
+    csv1 = os.path.join(d, "metrics_p1.csv")
+    csv2 = os.path.join(d, "metrics_p2.csv")
+    for policy, out in (("p1", csv1), ("p2", csv2)):
         srv = start_server(args.port_a, args.port_a, args.port_b, 2000, args.jitter,
                            args.profile, bw_noise=args.bw_noise, seed=args.seed)
         try:
             print(f"\n--- {policy} (controlado) ---")
-            run_client(policy, f"http://{HOST}:{args.port_a}", args.segments,
-                       csvp(dirs[policy]), args.confirm, args.max_buffer)
+            run_client(policy, f"http://{HOST}:{args.port_a}", args.segments, out,
+                       args.confirm, args.max_buffer)
         finally:
             stop(srv)
-    compare_pair(dirs, "P1", "P2", "banda variavel")
-
-
-def run_real(args):
-    """P1 vs P2 no servidor real: rede estavel -> politicas praticamente equivalentes."""
-    print(f"\n### REAL | servidor={args.real_server}")
-    dirs = args.real
-    for policy in ("p1", "p2"):
-        print(f"\n--- {policy} (real) ---")
-        run_client(policy, args.real_server, args.segments,
-                   csvp(dirs[policy]), args.confirm, args.max_buffer)
-    compare_pair(dirs, "P1 real", "P2 real", "rede estavel")
+    print("\n=== Comparacao P1 vs P2 (banda variavel) ===")
+    print_table(metrics(load(csv1)), metrics(load(csv2)))
+    graphs(d, "-i", csv1, "--compare", csv2, "--label1", "P1", "--label2", "P2", "--no-jitter")
 
 
 def run_failover(args):
     """Failover so e possivel num servidor que controlamos (o real nao da pra derrubar)."""
     print(f"\n### FAILOVER (mock, derruba A apos {args.kill_after}s)")
-    csv_fo = os.path.join(args.dir_failover, "metrics.csv")
+    d = args.dir_failover
+    csv_fo = os.path.join(d, "metrics.csv")
     srv_a = start_server(args.port_a, args.port_a, args.port_b, 1500, args.jitter, "")
     srv_b = start_server(args.port_b, args.port_a, args.port_b, 1000, args.jitter, "")
     try:
@@ -176,22 +147,20 @@ def run_failover(args):
     finally:
         stop(srv_a)
         stop(srv_b)
-    rows = load(csv_fo)
-    fo_rows = [r for r in rows if int(r["failover_total"]) > 0]
+    fo_rows = [r for r in load(csv_fo) if int(r["failover_total"]) > 0]
     if fo_rows:
         first = fo_rows[0]
         print(f"\n-> Failover no segmento {first['segment']}: server_id passou a {first['server_id']}, "
               f"qualidade {first['quality']}, buffer {first['buffer_level_s']}s, "
               f"can_play={first['buffer_can_play']} (1 = buffer absorveu a troca)")
     else:
-        print("\n-> Nenhum failover registrado (A nao foi derrubado a tempo? aumente --kill-after).")
-    graphs(args.dir_failover, "-i", csv_fo)
+        print("\n-> Nenhum failover registrado (aumente --kill-after).")
+    graphs(d, "-i", csv_fo, "--no-jitter")
 
 
 def main():
     p = argparse.ArgumentParser(description="Experimentos da Entrega 2 (P1 vs P2 + failover)")
-    p.add_argument("--mode", choices=["real", "controlled", "failover", "all"], default="all")
-    p.add_argument("--real-server", default="http://137.131.178.229:8080", help="servidor real da disciplina")
+    p.add_argument("--mode", choices=["controlled", "failover", "all"], default="all")
     p.add_argument("--profile", default=DEFAULT_PROFILE, help="banda por segmento (mock)")
     p.add_argument("--segments", type=int, default=30)
     p.add_argument("--confirm", type=int, default=3, help="P2: confirmacoes para mudar qualidade")
@@ -205,13 +174,11 @@ def main():
     p.add_argument("--outdir", default="results")
     args = p.parse_args()
 
-    args.real = scen_dirs(args.outdir, "real")
-    args.controlled = scen_dirs(args.outdir, "controlled")
+    args.dir_controlled = os.path.join(args.outdir, "controlled")
     args.dir_failover = os.path.join(args.outdir, "failover")
+    os.makedirs(args.dir_controlled, exist_ok=True)
     os.makedirs(args.dir_failover, exist_ok=True)
 
-    if args.mode in ("real", "all"):
-        run_real(args)
     if args.mode in ("controlled", "all"):
         run_controlled(args)
     if args.mode in ("failover", "all"):

@@ -11,7 +11,7 @@ segmento (--profile), garantindo que P1 e P2 enfrentem o MESMO cenario.
 
 Uso:
   python3 server.py --id A      --port 8080 --bandwidth 2000
-  python3 server.py --id srv-B  --port 8081 --bandwidth 1000
+  python3 server.py --id B  --port 8081 --bandwidth 1000
   python3 server.py --id A --port 8080 --profile "0:2000,8:400,16:1500,24:2200"
 """
 import argparse
@@ -81,7 +81,7 @@ def build_manifest(host, port_a, port_b, state_bw, priority_a=1, priority_b=2):
         "servers": [
             {"id": "A",     "url": f"http://{host}:{port_a}", "priority": priority_a,
              "bandwidth_kbps": state_bw, "jitter_ms": 0},
-            {"id": "srv-B", "url": f"http://{host}:{port_b}", "priority": priority_b,
+            {"id": "B", "url": f"http://{host}:{port_b}", "priority": priority_b,
              "bandwidth_kbps": None, "jitter_ms": None},
         ],
         "representations": REPRESENTATIONS,
@@ -170,8 +170,8 @@ def make_handler(state, manifest):
 
 def main():
     p = argparse.ArgumentParser(description="Mock do servidor da disciplina (A/B)")
-    p.add_argument("--id", default="A", help="id no manifest: A ou srv-B")
-    p.add_argument("--instance", default=None, help="rotulo no /health (default: A->A, srv-B->B)")
+    p.add_argument("--id", default="A", help="id no manifest: A ou B")
+    p.add_argument("--instance", default=None, help="rotulo no /health (default: A->A, B->B)")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8080)
     p.add_argument("--port-a", type=int, default=8080, help="porta do A no manifest")
@@ -183,7 +183,7 @@ def main():
     p.add_argument("--seed", type=int, default=42, help="semente do ruido (reprodutibilidade)")
     args = p.parse_args()
 
-    instance = args.instance or ("B" if args.id == "srv-B" else args.id)
+    instance = args.instance or ("B" if args.id == "B" else args.id)
     state = ServerState(instance, args.bandwidth, args.jitter, parse_profile(args.profile),
                         seed=args.seed, bw_noise=args.bw_noise)
     manifest = build_manifest(args.host, args.port_a, args.port_b, args.bandwidth)
