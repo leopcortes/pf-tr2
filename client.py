@@ -286,7 +286,7 @@ def main():
                 rebuffer, round(stall, 3), fo.failovers
             ])
             print(
-                f"Seg {i:3d}  |  [{fo.current['id']}]  |  q={q['quality']:>5}  |  thr={thr:7.0f}kbps "
+                f"Seg {i:3d}  |  Srv={fo.current['id']}  |  q={q['quality']:>5}  |  thr={thr:7.0f}kbps "
                 f"  |  dl={elapsed:5.2f}s  |  buf={buf.level:5.2f}s  |  play={can_play} "
                 f"  |  jit={jitter_net:5.1f}ms  |  stall={stall:.2f}s"
             )
