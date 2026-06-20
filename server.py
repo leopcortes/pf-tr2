@@ -22,12 +22,21 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+SEGMENT_DURATION_S = 2
+
+# segment_bytes = bitrate_kbps * seg_dur / 8 * 1000  (conteudo de SEGMENT_DURATION_S
+# segundos no bitrate nominal). Assim baixar um segmento custa ~seg_dur de banda no
+# bitrate escolhido: o buffer so cresce quando banda > bitrate, e drena (-> rebuffer)
+# quando banda < bitrate. E o que torna a decisao ABR relevante para o buffer.
+def _seg_bytes(bitrate_kbps):
+    return int(bitrate_kbps * SEGMENT_DURATION_S / 8 * 1000)
+
 REPRESENTATIONS = [
-    {"quality": "240p",  "bitrate_kbps": 200,  "segment_bytes": 25000,  "url_path": "/segment/240p"},
-    {"quality": "360p",  "bitrate_kbps": 400,  "segment_bytes": 50000,  "url_path": "/segment/360p"},
-    {"quality": "480p",  "bitrate_kbps": 700,  "segment_bytes": 87500,  "url_path": "/segment/480p"},
-    {"quality": "720p",  "bitrate_kbps": 1500, "segment_bytes": 187500, "url_path": "/segment/720p"},
-    {"quality": "1080p", "bitrate_kbps": 3000, "segment_bytes": 375000, "url_path": "/segment/1080p"},
+    {"quality": "240p",  "bitrate_kbps": 200,  "segment_bytes": _seg_bytes(200),  "url_path": "/segment/240p"},
+    {"quality": "360p",  "bitrate_kbps": 400,  "segment_bytes": _seg_bytes(400),  "url_path": "/segment/360p"},
+    {"quality": "480p",  "bitrate_kbps": 700,  "segment_bytes": _seg_bytes(700),  "url_path": "/segment/480p"},
+    {"quality": "720p",  "bitrate_kbps": 1500, "segment_bytes": _seg_bytes(1500), "url_path": "/segment/720p"},
+    {"quality": "1080p", "bitrate_kbps": 3000, "segment_bytes": _seg_bytes(3000), "url_path": "/segment/1080p"},
 ]
 CHUNK = 4096
 
@@ -77,7 +86,7 @@ class ServerState:
 def build_manifest(host, port_a, port_b, state_bw, priority_a=1, priority_b=2):
     return {
         "version": "2.0",
-        "segment_duration_s": 2,
+        "segment_duration_s": SEGMENT_DURATION_S,
         "servers": [
             {"id": "A",     "url": f"http://{host}:{port_a}", "priority": priority_a,
              "bandwidth_kbps": state_bw, "jitter_ms": 0},

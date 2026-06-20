@@ -87,25 +87,33 @@ def plot_jitter(rows, out):
     plt.close(fig)
     print(f"-> {out}")
 
-# ---- modo comparacao (P1 vs P2 no mesmo cenario) ----
+# ---- modo comparacao (N politicas no mesmo cenario, ex: P1 vs P2 vs P3) ----
+
+COLORS = ["tab:red", "tab:green", "tab:blue", "tab:orange", "tab:purple"]
 
 def _col(rows, name, cast=float):
     return [cast(r[name]) for r in rows]
 
-def compare_quality(r1, r2, l1, l2, out):
-    segs = _col(r1, "segment", int)
-    fig, ax = plt.subplots(figsize=(10, 4.5))
-    # vazao medida como referencia compartilhada (cenario igual)
-    ax.plot(segs, _col(r1, "throughput_kbps"), color="tab:blue", alpha=0.35,
-            linewidth=1, label="Vazao medida (kbps)")
-    ax.step(segs, _col(r1, "bitrate_kbps", int), where="post", color="tab:red",
-            linewidth=2, label=f"Bitrate {l1}")
-    ax.step(_col(r2, "segment", int), _col(r2, "bitrate_kbps", int), where="post",
-            color="tab:green", linewidth=2, label=f"Bitrate {l2}")
-    mark_failovers(ax, failover_segments(r1) + failover_segments(r2))
+def _all_failovers(series):
+    segs = []
+    for rows, _ in series:
+        segs += failover_segments(rows)
+    return segs
+
+def compare_quality(series, out):
+    """series = [(rows, label), ...]. Bitrate de cada politica + vazao de
+    referencia (cenario igual para todas)."""
+    fig, ax = plt.subplots(figsize=(11, 4.5))
+    ref_rows = series[0][0]
+    ax.plot(_col(ref_rows, "segment", int), _col(ref_rows, "throughput_kbps"),
+            color="tab:gray", alpha=0.4, linewidth=1, label="Vazao medida (kbps)")
+    for i, (rows, label) in enumerate(series):
+        ax.step(_col(rows, "segment", int), _col(rows, "bitrate_kbps", int), where="post",
+                color=COLORS[i % len(COLORS)], linewidth=2, label=f"Bitrate {label}")
+    mark_failovers(ax, _all_failovers(series))
     ax.set_xlabel("Segmento")
     ax.set_ylabel("kbps")
-    ax.set_title(f"Qualidade selecionada: {l1} vs {l2} (mesmo cenario)")
+    ax.set_title("Qualidade selecionada por politica (mesmo cenario, mesma escala)")
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()
@@ -113,22 +121,21 @@ def compare_quality(r1, r2, l1, l2, out):
     plt.close(fig)
     print(f"-> {out}")
 
-def compare_buffer(r1, r2, l1, l2, out):
-    fig, ax = plt.subplots(figsize=(10, 4.5))
-    s1 = _col(r1, "segment", int)
-    s2 = _col(r2, "segment", int)
-    ax.plot(s1, _col(r1, "buffer_level_s"), color="tab:red", linewidth=2, label=f"Buffer {l1}")
-    ax.plot(s2, _col(r2, "buffer_level_s"), color="tab:green", linewidth=2, label=f"Buffer {l2}")
+def compare_buffer(series, out):
+    fig, ax = plt.subplots(figsize=(11, 4.5))
     ax.axhline(2.0, color="gray", linestyle=":", label="threshold can_play=2s")
-    for rows, color, lab in ((r1, "tab:red", l1), (r2, "tab:green", l2)):
+    for i, (rows, label) in enumerate(series):
+        color = COLORS[i % len(COLORS)]
+        ax.plot(_col(rows, "segment", int), _col(rows, "buffer_level_s"),
+                color=color, linewidth=2, label=f"Buffer {label}")
         rb = [int(r["segment"]) for r in rows if int(r["rebuffer_event"]) == 1]
         if rb:
-            ax.scatter(rb, [0] * len(rb), marker="x", color=color, s=70,
-                       label=f"rebuffer {lab}")
-    mark_failovers(ax, failover_segments(r1) + failover_segments(r2))
+            ax.scatter(rb, [0] * len(rb), marker="x", color=color, s=80,
+                       zorder=5, label=f"rebuffer {label}")
+    mark_failovers(ax, _all_failovers(series))
     ax.set_xlabel("Segmento")
     ax.set_ylabel("Segundos")
-    ax.set_title(f"Nivel do buffer: {l1} vs {l2}")
+    ax.set_title("Nivel do buffer e rebuffering por politica")
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()
@@ -136,16 +143,15 @@ def compare_buffer(r1, r2, l1, l2, out):
     plt.close(fig)
     print(f"-> {out}")
 
-def compare_jitter(r1, r2, l1, l2, out):
-    fig, ax = plt.subplots(figsize=(10, 4.5))
-    ax.plot(_col(r1, "segment", int), _col(r1, "jitter_ewma_ms"), color="tab:red",
-            linewidth=2, label=f"Jitter EWMA {l1}")
-    ax.plot(_col(r2, "segment", int), _col(r2, "jitter_ewma_ms"), color="tab:green",
-            linewidth=2, label=f"Jitter EWMA {l2}")
-    mark_failovers(ax, failover_segments(r1) + failover_segments(r2))
+def compare_jitter(series, out):
+    fig, ax = plt.subplots(figsize=(11, 4.5))
+    for i, (rows, label) in enumerate(series):
+        ax.plot(_col(rows, "segment", int), _col(rows, "jitter_ewma_ms"),
+                color=COLORS[i % len(COLORS)], linewidth=2, label=f"Jitter EWMA {label}")
+    mark_failovers(ax, _all_failovers(series))
     ax.set_xlabel("Segmento")
     ax.set_ylabel("ms")
-    ax.set_title(f"Jitter EWMA: {l1} vs {l2}")
+    ax.set_title("Variacao de atraso (jitter) EWMA por politica")
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()
@@ -154,10 +160,12 @@ def compare_jitter(r1, r2, l1, l2, out):
     print(f"-> {out}")
 
 def main():
-    p = argparse.ArgumentParser(description="Graficos do cliente ABR (individual ou comparativo)")
+    p = argparse.ArgumentParser(description="Graficos do cliente ABR (individual ou comparativo N politicas)")
     p.add_argument("-i", "--input", default="metrics_baseline.csv")
-    p.add_argument("--compare", help="CSV da segunda politica para sobrepor (modo comparacao)")
-    p.add_argument("--label1", default="P1")
+    p.add_argument("--compare", action="append", default=[],
+                   help="CSV adicional para sobrepor; repita para 3+ politicas (P1 vs P2 vs P3)")
+    p.add_argument("--labels", nargs="+", help="rotulos das series (1 por CSV, incluindo o -i)")
+    p.add_argument("--label1", default="P1")  # retrocompat
     p.add_argument("--label2", default="P2")
     p.add_argument("--no-jitter", action="store_true", help="nao gerar o grafico de jitter")
     p.add_argument("-d", "--outdir", default=".")
@@ -170,17 +178,20 @@ def main():
     os.makedirs(args.outdir, exist_ok=True)
 
     if args.compare:
-        rows2 = load(args.compare)
-        if not rows2:
-            print("CSV de comparacao vazio.")
-            return 1
-        compare_quality(rows, rows2, args.label1, args.label2,
-                        os.path.join(args.outdir, "compare_quality.png"))
-        compare_buffer(rows, rows2, args.label1, args.label2,
-                       os.path.join(args.outdir, "compare_buffer.png"))
+        paths = [args.input] + args.compare
+        labels = args.labels if args.labels else [args.label1, args.label2] + \
+            [f"P{i + 3}" for i in range(len(args.compare) - 1)]
+        series = []
+        for path, label in zip(paths, labels):
+            r = load(path)
+            if not r:
+                print(f"CSV de comparacao vazio: {path}")
+                return 1
+            series.append((r, label))
+        compare_quality(series, os.path.join(args.outdir, "compare_quality.png"))
+        compare_buffer(series, os.path.join(args.outdir, "compare_buffer.png"))
         if not args.no_jitter:
-            compare_jitter(rows, rows2, args.label1, args.label2,
-                           os.path.join(args.outdir, "compare_jitter.png"))
+            compare_jitter(series, os.path.join(args.outdir, "compare_jitter.png"))
         return 0
 
     plot_throughput_quality(rows, os.path.join(args.outdir, "throughput_quality.png"))

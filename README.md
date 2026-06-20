@@ -12,25 +12,27 @@ Servidor da disciplina: `http://137.131.178.229:8080` (primário, `A`) e `:8081`
 |---|---|---|
 | 1 | P1 - Rate-Based baseline | ✅ |
 | 2 | Análise de deficiências + P2 (histerese) + failover A→B | ✅ |
-| Final | P3 (EWMA/estatística) + Wireshark + relatório | pendente |
+| Final | P3 (EWMA + σ + jitter) + painel ao vivo + ensaio do cenário surpresa | ✅ |
 
 ## Estrutura
 
 ```
-client.py              # cliente: P1 e P2, buffer com pacing real-time, failover
-server.py              # mock da infra (A/B): muda banda ao vivo (/control) e e killable
-experiment.py          # gera os artefatos do relatorio (controlado + failover)
-graph.py               # graficos (individual e comparativo, com marcador de failover)
+client.py              # cliente: P1/P2/P3, buffer com pacing real-time, failover, painel ao vivo
+server.py              # mock da infra (A/B): segmentos de 2s, muda banda ao vivo (/control), killable
+experiment.py          # gera os artefatos do relatorio (controlado / jitter / failover / live)
+graph.py               # graficos (individual e comparativo de N politicas, com marcador de failover)
 results/
   baseline/      metrics.csv  throughput_quality.png        # Entrega 1: P1 no real, rede estavel
-  controlled/    metrics_p1.csv  metrics_p2.csv             # P1 vs P2, banda variavel (mock)
-                 compare_quality.png  compare_buffer.png    #   -> a deficiencia (oscilacao) aparece
-  failover/      metrics.csv  buffer_level.png  throughput_quality.png  # A->B
+  controlled/    metrics_p{1,2,3}.csv                        # P1 vs P2 vs P3, banda ruidosa (oscilacao)
+                 compare_quality.png  compare_buffer.png    #   -> a deficiencia (oscilacao) do baseline aparece
+  jitter/        metrics_p{1,2,3}.csv  compare_*.png         # banda alta -> queda brusca: AQUI a P3 ganha
+  failover/      metrics.csv  buffer_level.png               # P3 + A->B (buffer absorve a troca)
+  live/          metrics.csv                                 # ensaio do cenario surpresa (P3)
 ```
 
-### Cenário controlado (mock)
+### Por que um mock (cenários controlados)
 
-O servidor real da disciplina é fixo (A=2000 / B=1000 kbps, sem variação) e não é derrubável pelos alunos. Em rede estável o baseline não tem deficiência para mostrar (P1≈P2) e failover é impossível sem matar o A. Então a comparação que prova a Tarefa 2 e o failover usam um servidor que mock, o mesmo tipo de cenário que o professor impõe ao vivo (mudar banda, derrubar o A). O `baseline/` é a referência "rede real estável".
+O servidor real da disciplina é fixo (A=2000 / B=1000 kbps, sem variação) e não é derrubável pelos alunos. Em rede estável as políticas são equivalentes e o failover é impossível sem matar o A. Então as comparações que provam as deficiências (oscilação na Tarefa 2, queda brusca/jitter na Tarefa 3) e o failover usam um servidor **mock** - o mesmo tipo de cenário que o professor impõe ao vivo (mudar banda, injetar jitter, derrubar o A). O mock é determinístico por `--seed`, então P1/P2/P3 enfrentam exatamente a mesma sequência de banda e jitter (comparação justa). O `baseline/` é a referência "rede real estável".
 
 ## Instalação
 
@@ -46,7 +48,7 @@ python3 -m venv .venv
 
 ### Experimento completo (recomendado)
 
-Gera os artefatos do relatório: P1 vs P2 no mock com banda variável e o failover.
+Gera os artefatos do relatório: P1 vs P2 vs P3 no controlado e no jitter, mais o failover.
 
 ```bash
 .venv/bin/python experiment.py --mode all --segments 30 --outdir results
@@ -54,22 +56,33 @@ Gera os artefatos do relatório: P1 vs P2 no mock com banda variável e o failov
 
 O playback é em **tempo real** (buffer limitado), então cada run leva ~`segments * 2s`. Use `--segments` menor para iterar mais rápido.
 
-Modos: `--mode controlled`, `--mode failover`, `--mode all`. Opções: `--max-buffer` (default 20), `--profile`, `--bw-noise`, `--kill-after`.
+Modos: `--mode controlled` (oscilação), `--mode jitter` (a P3 ganha), `--mode failover`, `--mode all`, e `--mode live` (ensaio do cenário surpresa, ver abaixo). Opções: `--max-buffer`, `--jitter-profile`, `--jitter-bw-noise`, `--jitter-ms`, `--kill-after`, `--k-sigma`, `--jitter-ref`.
 
-### Cliente avulso
+### Simulação da apresentação ao vivo
+
+Roda a P3 com o painel ao vivo enquanto um "professor" simulado, numa timeline, derruba a banda do A, injeta jitter e por fim mata o A (→ failover para B). É o ensaio da demo final.
 
 ```bash
-# P1 contra o servidor real (rede estavel)
-.venv/bin/python client.py --policy p1 --server http://137.131.178.229:8080 -n 30 --max-buffer 20 -o p1_real.csv
+.venv/bin/python experiment.py --mode live --segments 30 \
+  --bw-at 14 --jit-at 22 --kill-at 32
+```
 
-# politica 2 (histerese) contra o mock local
-.venv/bin/python client.py --policy p2 --server http://127.0.0.1:8090 -n 30 --max-buffer 20 -o p2_mock.csv
+### Apresentação ao vivo com professor
+
+```bash
+# P3 contra o servidor real, com o painel ao vivo
+.venv/bin/python client.py --policy p3 --server http://137.131.178.229:8080 -n 40 --max-buffer 20 -o sessao.csv
+
+# politicas P1/P2 para comparacao
+.venv/bin/python client.py --policy p1 --server http://137.131.178.229:8080 -n 30 -o p1_real.csv
 ```
 
 Flags do cliente:
-- `--policy {p1,p2}` - política ABR (default `p1`)
-- `--confirm N` - P2: segmentos consecutivos para confirmar mudança de qualidade (default 3)
-- `--max-buffer S` - teto do buffer em segundos / playback real-time (default 10; experimento usa 20)
+- `--policy {p1,p2,p3}` - política ABR (default `p1`)
+- `--confirm N` - P2: segmentos para confirmar mudança de qualidade (default 3)
+- `--alpha A` `--k-sigma K` `--jitter-ref MS` - parâmetros da P3 (peso EWMA, margem em σ, jitter de referência)
+- `--max-buffer S` - teto do buffer em segundos / playback real-time
+- `--quiet` - sem painel por segmento (só eventos + resumo); `--no-color` desliga ANSI
 - `--server URL`, `-n/--segments`, `-o/--output`
 
 ### Servidor mock (manual)
@@ -104,21 +117,48 @@ Deficiência conhecida: sob vazão ruidosa perto da fronteira de uma qualidade, 
 1. **Slow-start:** começa em 240p e sobe gradualmente (um nível por vez).
 2. **Histerese:** só muda de qualidade após `confirm` (default 3) segmentos consecutivos apontando para a mesma direção. Ruído de vazão que faria o baseline oscilar não acumula confirmação, então a qualidade fica estável.
 
-Resolve a deficiência de oscilação do baseline.
+Resolve a deficiência de oscilação do baseline. **Mas introduz uma fraqueza:** numa queda brusca de banda, a histerese (confirm=3) demora a descer e o buffer drena (ver cenário de jitter abaixo) - fraqueza que a P3 corrige.
 
-## Análise de deficiências (P1 vs P2)
+## Política 3 - EWMA + desvio-padrão + penalidade de jitter
 
-No servidor real (rede estável), P1 e P2 são equivalentes: ambas convergem para 480p, sem oscilação (a P2 fica só 1 troca atrás pelo slow-start). Ou seja, a deficiência não existe quando a banda não varia - por isso a comparação que prova o ponto é a controlada, com banda variável.
+`EwmaStdJitterABR`: estimativa conservadora com componente estatístico e sensibilidade a jitter. Três ideias somadas:
 
-Cenário controlado (`results/controlled/`): mesmo cliente contra o mock - ramp a 1600 kbps (seg 0-7) e platô ruidoso a 1100 kbps (seg 8+, `bw-noise=0.22`), onde a vazão medida (~950 kbps) faz a estimativa cruzar a fronteira de 700 kbps (480p).
+```
+thr_ewma = α·thr + (1-α)·thr_ewma        # EWMA: vazão recente pesa mais (reage rápido)
+σ        = std(janela de vazões)          # volatilidade da rede
+pen_jit  = 1 - min(jitter_ewma/J0, 0.5)   # jitter alto penaliza até 50%
+estimativa = (thr_ewma − k·σ) · pen_jit   # escolhe maior bitrate ≤ estimativa
+```
 
-| Métrica | P1 | P2 |
-|---|---|---|
-| trocas de qualidade | 5 | 2 |
-| rebuffers | 0 | 0 |
-| bitrate médio (kbps) | 663 | 620 |
+1. **EWMA da vazão** (α=0.4): reage mais rápido a mudanças de banda que a média simples do baseline.
+2. **Margem por desvio-padrão** (k=1): subtrai `k·σ`. Quanto mais volátil a vazão, mais conservadora a escolha - não escolhe uma qualidade que só a média sustenta.
+3. **Penalidade de jitter** (J0=45 ms): quando o jitter EWMA sobe, a entrega fica irregular e a vazão média engana; a estimativa cai proporcionalmente, protegendo o buffer. **É o tratamento explícito de jitter** que a Tarefa 3 exige.
 
-Aqui a deficiência aparece: o baseline oscila (flapa 480p↔360p toda vez que o ruído cruza a fronteira), enquanto a P2 segura 480p. P2 reduz as trocas em ~60% mantendo praticamente a mesma qualidade média (a diferença é só o slow-start). Ver `results/controlled/compare_quality.png`.
+Mantém **histerese assimétrica**: sobe devagar (confirm_up=2, evita oscilação como a P2) mas desce rápido (confirm_down=1, protege o buffer na queda). É o que falta na P2.
+
+## Análise de deficiências e comparação das 3 políticas
+
+**Cenário 1 - oscilação (`results/controlled/`):** banda ruidosa (`bw-noise=0.22`) perto da fronteira de 480p. Aqui aparece a deficiência do baseline.
+
+| Métrica | P1 | P2 | P3 |
+|---|---|---|---|
+| trocas de qualidade | 7 | 2 | 4 |
+| rebuffers | 0 | 0 | 0 |
+| bitrate médio (kbps) | 653 | 620 | 627 |
+
+O baseline (P1) oscila (7 trocas, flapa 480p↔360p quando o ruído cruza a fronteira). P2 e P3 estabilizam (2 e 4 trocas); a P3 fica entre as duas porque o downshift rápido (confirm_down=1) reage a alguns vales - preço que ela paga para vencer no cenário seguinte.
+
+**Cenário 2 - jitter / queda brusca (`results/jitter/`):** banda alta e estável (3000 kbps) que despenca para 430 kbps no segmento 10, com jitter alto. Aqui a P3 ganha.
+
+| Métrica | P1 | P2 | P3 |
+|---|---|---|---|
+| rebuffers | 2 | 7 | 1 |
+| stall total (s) | 0.47 | 8.79 | 0.06 |
+| bitrate médio (kbps) | 380 | 390 | 337 |
+
+Na fase estável as três cavalgam 480p. Na queda (seg 10), P1 (média) demora 1-2 segmentos a descer e P2 (histerese) trava em 480p por ~5 segmentos - 480p a 430 kbps leva ~3,3 s/segmento, o buffer drena e estola em cadeia (7 rebuffers, 8,8 s de stall). A P3 reage no mesmo segmento (EWMA + salto do σ) e desce para 360p→240p, sobrevivendo com 1 rebuffer (0,06 s), ao custo de ~10% menos bitrate que o baseline. Em `results/jitter/compare_buffer.png` a P2 fica grudada no threshold de 2 s com a fileira de rebuffers.
+
+> Conclusão: a P3 reduziu o rebuffering de 2→1 vs baseline e de 7→1 vs P2, e o stall de 0,47→0,06 s, mantendo bitrate comparável. É robusta nos dois cenários, enquanto P1 falha na queda e P2 na queda também.
 
 ## Failover
 
@@ -126,13 +166,24 @@ Aqui a deficiência aparece: o baseline oscila (flapa 480p↔360p toda vez que o
 - Em falha do servidor ativo (timeout / conexão recusada / status ≠ 200): faz `GET /health` no próximo da fila, migra para o primeiro saudável, re-baixa o segmento no novo servidor, incrementa `failover_total` e troca `server_id`.
 - O `buffer_can_play` na linha do evento indica se o buffer absorveu a troca sem rebuffer.
 
-Failover só é testável num servidor que controlamos (o real não é derrubável; na apresentação quem mata o A é o professor, ao vivo). No cenário do mock (A=1500, B=1000 kbps), derrubando A no segmento 12:
+Failover só é testável num servidor que controlamos (o real não é derrubável; na apresentação quem mata o A é o professor, ao vivo). No cenário do mock (A=1500, B=1000 kbps), com a P3 e derrubando o A no meio do streaming:
 
-- **Tempo:** ~1 ms para o health-check achar o B saudável; o segmento é re-baixado no B na mesma iteração.
-- **Buffer suficiente?** Sim - buffer ~20 s no momento da queda → `can_play=1`, **zero rebuffer**.
-- **Qualidade após a troca e por quê:** segue **480p** imediatamente (segs 12–16), porque o buffer cheio dá folga para continuar na qualidade alta enquanto a P2 reavalia. Em seguida (seg 17) a P2 **desce para 360p**, pois aprende que o B é mais lento (vazão ~870 vs ~1200 kbps no A) e a histerese confirma a queda — adaptação correta à capacidade real do novo servidor.
+- **Tempo:** ~1-2 ms para o health-check achar o B saudável; o segmento é re-baixado no B na mesma iteração.
+- **Buffer suficiente?** Sim - buffer cheio no momento da queda → `can_play=1`, **zero rebuffer** (a linha do evento no CSV mostra `buffer_can_play=1`).
+- **Qualidade após a troca e por quê:** segue na qualidade alta imediatamente após a troca (o buffer cheio dá folga); em seguida a P3 **desce um nível**, pois aprende que o B é mais lento (vazão menor) e o desvio-padrão/EWMA confirmam a queda - adaptação correta à capacidade real do novo servidor.
 
 Ver `results/failover/buffer_level.png` (linha vertical no segmento do evento).
+
+## Painel ao vivo
+
+O cliente imprime um painel no terminal (stdlib, sem dependências; cores ANSI que desligam sozinhas fora de um terminal). Uma linha por segmento - mantém o histórico visível, então responde "em qual segmento o cliente detectou a mudança" - com:
+
+- servidor ativo (verde A / amarelo B), qualidade, vazão com tendência ▲▼, buffer com `can_play` ✓/✗, jitter com alerta ⚠;
+- a razão da decisão ABR ao lado (`ewma… −σ… ×jit = estimativa → qualidade`) - é o "porquê" que o professor pergunta, e mostra onde a decisão é tomada (`select()` da política em `client.py`);
+- failover e rebuffer em destaque (banner vermelho com tempo da troca e veredito do buffer);
+- quadro-resumo ao final (trocas, rebuffers, stall, bitrate médio, failovers).
+
+`--quiet` reduz para só os eventos + resumo (usado pelo `experiment.py` nas runs em lote).
 
 ## Buffer e pacing
 
