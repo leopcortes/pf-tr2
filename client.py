@@ -422,7 +422,7 @@ def main():
     jitter_ewma = 0.0
     alpha = 0.2
 
-    panel = Panel(args.policy, color=(False if args.no_color else None), verbose=not args.quiet)
+    panel = Panel(args.policy, color=None)
     panel.header([s["id"] for s in servers], [q["quality"] for q in representations], seg_dur)
 
     bitrates = []

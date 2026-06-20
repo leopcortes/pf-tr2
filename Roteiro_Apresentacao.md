@@ -12,22 +12,22 @@ python3 -m venv .venv && .venv/bin/pip install matplotlib
 
 ### (a) Baseline no servidor REAL, painel ao vivo - Entrega 1
 ```bash
-.venv/bin/python client.py --policy p1 --server http://137.131.178.229:8080 -n 10 -o p1_real.csv
+.venv/bin/python client.py --policy p1 --server http://137.131.178.229:8080 -n 10 -o results/p1_real.csv
 ```
 
 ### (b) P3 no servidor REAL durante o cenário surpresa (banda/jitter/failover do professor)
 ```bash
-.venv/bin/python client.py --policy p3 --server http://137.131.178.229:8080 -n 40 --max-buffer 20 -o sessao.csv
+.venv/bin/python client.py --policy p3 --server http://137.131.178.229:8080 -n 40 --max-buffer 20 -o results/sessao.csv
 ```
 
-### (c) Ensaio offline do cenário surpresa (treinar sem o professor)
+### (c) Ensaio offline do cenário surpresa (pra treinar sem o professor)
 ```bash
 .venv/bin/python experiment.py --mode live --segments 30 --bw-at 14 --jit-at 22 --kill-at 32
 ```
 
 ### (d) Regerar gráficos comparativos (se precisar)
 ```bash
-.venv/bin/python graph.py -i results/jitter/metrics_p1.csv --compare results/jitter/metrics_p2.csv -d results/jitter --no-jitter
+.venv/bin/python graph.py -i results/p3_jitter/metrics_p1.csv --compare results/p3_jitter/metrics_p2.csv -d results/p3_jitter --no-jitter
 ```
 
 ---

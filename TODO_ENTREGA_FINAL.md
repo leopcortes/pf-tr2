@@ -19,6 +19,6 @@
   - [ ] Print anotado para a seção 8 do relatório
 
 - [ ] Enviar arquvios no aprender
-  - [ ] CSVs como anexo (`results//metrics*.csv` + `sessao.csv`)
-  - [ ] Gráficos finais (`results//*.png`)
+  - [ ] CSVs como anexo (`results/**/metrics*.csv` + `results/sessao.csv`)
+  - [ ] Gráficos finais (`results/**/*.png`)
   - [ ] Código: `client.py` e `README.md`

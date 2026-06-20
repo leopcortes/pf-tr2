@@ -11,8 +11,8 @@ Cenarios:
   live        ENSAIO do cenario surpresa: um "professor" simulado muda a banda,
               injeta jitter e derruba o A ao vivo, com o painel do cliente rodando.
 
-(P1 no servidor real, rede estavel, esta em results/baseline/ - Entrega 1.)
-Saida em results/<cenario>/. Rode com o python do venv (matplotlib):
+(P1 no servidor real, rede estavel, esta em results/p1_baseline/ - Entrega 1.)
+Saida em results/p2_controlled, p3_jitter, p2_failover, live. Rode com o venv (matplotlib):
   .venv/bin/python experiment.py --mode all
 """
 import argparse
@@ -308,8 +308,10 @@ def main():
     p.add_argument("--outdir", default="results")
     args = p.parse_args()
 
+    dir_names = {"controlled": "p2_controlled", "jitter": "p3_jitter",
+                 "failover": "p2_failover", "live": "live"}
     for name in ("controlled", "jitter", "failover", "live"):
-        setattr(args, f"dir_{name}", os.path.join(args.outdir, name))
+        setattr(args, f"dir_{name}", os.path.join(args.outdir, dir_names[name]))
         os.makedirs(getattr(args, f"dir_{name}"), exist_ok=True)
 
     if args.mode in ("controlled", "all"):
