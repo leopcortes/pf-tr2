@@ -135,19 +135,23 @@ class EwmaStdJitterABR:
       2. Margem por desvio-padrao -> subtrai k*sigma da estimativa. Quanto
          mais volatil a vazao (rede instavel), mais conservadora a escolha:
          evita escolher uma qualidade que so a media sustenta.
-      3. Penalidade de jitter -> quando o jitter EWMA sobe, a entrega dos
-         segmentos fica irregular e a vazao media engana; a estimativa e
-         reduzida proporcionalmente, protegendo o buffer.
+      3. Penalidade de jitter (com zona morta) -> jitter abaixo de jitter_floor
+         e tratado como ruido normal da rede e NAO penaliza; so o excesso acima
+         do piso reduz a estimativa. Quando o jitter EWMA sobe de verdade, a
+         entrega fica irregular e a vazao media engana; a estimativa cai
+         proporcionalmente ao excesso, protegendo o buffer. (Sem a zona morta,
+         jitter saudavel de ~18ms ja cortava ~40% e a P3 perdia qualidade a toa.)
 
     Mantem histerese (assimetrica) e slow-start para nao reintroduzir a
     oscilacao que a P2 corrigiu: sobe devagar (confirm_up), desce rapido
     (confirm_down) para proteger o buffer quando a banda cai."""
-    def __init__(self, representations, alpha=0.4, k_sigma=1.0, jitter_ref_ms=50.0,
-                 jitter_cap=0.5, window=5, confirm_up=2, confirm_down=1):
+    def __init__(self, representations, alpha=0.4, k_sigma=1.0, jitter_ref_ms=60.0,
+                 jitter_floor_ms=20.0, jitter_cap=0.5, window=5, confirm_up=2, confirm_down=1):
         self.qualities = sorted(representations, key=lambda q: q["bitrate_kbps"])
         self.alpha = alpha
         self.k = k_sigma
         self.jitter_ref = jitter_ref_ms
+        self.jitter_floor = jitter_floor_ms
         self.jitter_cap = jitter_cap
         self.window = window
         self.confirm_up = confirm_up
@@ -174,7 +178,8 @@ class EwmaStdJitterABR:
         sigma = statistics.pstdev(self.samples) if len(self.samples) >= 2 else 0.0
         pen = 1.0
         if self.jitter_ref > 0:
-            pen = 1 - min(self.jitter_ewma / self.jitter_ref, self.jitter_cap)
+            excess = max(0.0, self.jitter_ewma - self.jitter_floor)  # zona morta: ignora jitter normal
+            pen = 1 - min(excess / self.jitter_ref, self.jitter_cap)
         est = max(0.0, (self.ewma - self.k * sigma) * pen)
         return est, sigma, pen
 
@@ -320,7 +325,7 @@ class Panel:
     def header(self, servers, qualities, seg_dur, extra=""):
         bar = "═" * 92
         print(self._p(bar, "cyan"))
-        print(self._p(f" ABR LIVE - política {self.policy.upper()} ", "bold", "cyan")
+        print(self._p(f" ABR - política {self.policy.upper()} ", "bold", "cyan")
               + self._p(f" servidores={servers}  qualidades={qualities}  seg={seg_dur}s", "dim"))
         if extra:
             print(self._p(" " + extra, "dim"))
@@ -384,15 +389,19 @@ def parse_args():
     p.add_argument("--confirm", type=int, default=3, help="P2: segmentos para confirmar subida")
     p.add_argument("--alpha", type=float, default=0.4, help="P3: peso da EWMA de vazao")
     p.add_argument("--k-sigma", type=float, default=1.0, help="P3: margem conservadora (k desvios-padrao)")
-    p.add_argument("--jitter-ref", type=float, default=45.0, help="P3: jitter (ms) que zera a penalidade no cap")
+    p.add_argument("--jitter-ref", type=float, default=60.0, help="P3: jitter (ms) acima do piso que satura a penalidade")
+    p.add_argument("--jitter-floor", type=float, default=20.0, help="P3: jitter (ms) tratado como ruido normal (zona morta, sem penalidade)")
     p.add_argument("--max-buffer", type=float, default=10.0, help="teto do buffer em s (playback real-time)")
     p.add_argument("-n", "--segments", type=int, default=DEFAULT_SEGMENTS, help="Numero de segmentos")
     p.add_argument("-o", "--output", default=DEFAULT_CSV, help="Arquivo CSV de saida")
+    p.add_argument("--quiet", action="store_true", help="sem painel por segmento (so eventos + resumo); usado nas runs em lote")
+    p.add_argument("--no-color", action="store_true", help="desliga cores ANSI")
     return p.parse_args()
 
 def make_abr(policy, representations, args):
     if policy == "p3":
-        return EwmaStdJitterABR(representations, alpha=args.alpha, k_sigma=args.k_sigma, jitter_ref_ms=args.jitter_ref)
+        return EwmaStdJitterABR(representations, alpha=args.alpha, k_sigma=args.k_sigma,
+                                jitter_ref_ms=args.jitter_ref, jitter_floor_ms=args.jitter_floor)
     if policy == "p2":
         return RateBasedHysteresisABR(representations, confirm=args.confirm)
     return RateBasedABR(representations)
@@ -413,7 +422,7 @@ def main():
     for r in representations:
         r.setdefault("quality", r.get("name"))
         r.setdefault("url_path", f"/segment/{r['quality']}")
-    seg_dur = float(manifest.get("segment_duration_s", 4.0))
+    seg_dur = float(manifest.get("segment_duration_s", 2.0))
     servers = resolve_servers(manifest, args.server)
 
     buf = BufferManager(seg_dur, max_buffer=args.max_buffer)
@@ -422,7 +431,7 @@ def main():
     jitter_ewma = 0.0
     alpha = 0.2
 
-    panel = Panel(args.policy, color=None)
+    panel = Panel(args.policy, color=(False if args.no_color else None), verbose=not args.quiet)
     panel.header([s["id"] for s in servers], [q["quality"] for q in representations], seg_dur)
 
     bitrates = []

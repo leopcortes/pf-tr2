@@ -40,7 +40,6 @@ REPRESENTATIONS = [
 ]
 CHUNK = 4096
 
-
 def parse_profile(spec):
     """'0:2000,8:400' -> [(0, 2000.0), (8, 400.0)] ordenado por indice de segmento."""
     if not spec:
@@ -50,7 +49,6 @@ def parse_profile(spec):
         idx, bw = part.split(":")
         steps.append((int(idx), float(bw)))
     return sorted(steps, key=lambda s: s[0])
-
 
 class ServerState:
     def __init__(self, instance, bandwidth, jitter, profile, seed=42, bw_noise=0.0):
@@ -82,7 +80,6 @@ class ServerState:
             self.segments_served += 1
             return bw, self.jitter_ms, idx
 
-
 def build_manifest(host, port_a, port_b, state_bw, priority_a=1, priority_b=2):
     return {
         "version": "2.0",
@@ -95,7 +92,6 @@ def build_manifest(host, port_a, port_b, state_bw, priority_a=1, priority_b=2):
         ],
         "representations": REPRESENTATIONS,
     }
-
 
 def make_handler(state, manifest):
     rep_by_quality = {r["quality"]: r for r in REPRESENTATIONS}
@@ -176,7 +172,6 @@ def make_handler(state, manifest):
 
     return Handler
 
-
 def main():
     p = argparse.ArgumentParser(description="Mock do servidor da disciplina (A/B)")
     p.add_argument("--id", default="A", help="id no manifest: A ou B")
@@ -204,7 +199,6 @@ def main():
     except KeyboardInterrupt:
         print(f"\n[server {instance}] parando.")
         httpd.shutdown()
-
 
 if __name__ == "__main__":
     main()

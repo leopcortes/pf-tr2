@@ -34,7 +34,7 @@ results/
 
 ### Por que um mock (cenários controlados)
 
-O servidor real da disciplina é fixo (A=2000 / B=1000 kbps, sem variação) e não é derrubável pelos alunos. Em rede estável as políticas são equivalentes e o failover é impossível sem matar o A. Então as comparações que provam as deficiências (oscilação na Tarefa 2, queda brusca/jitter na Tarefa 3) e o failover usam um servidor **mock** - o mesmo tipo de cenário que o professor impõe ao vivo (mudar banda, injetar jitter, derrubar o A). O mock é determinístico por `--seed`, então P1/P2/P3 enfrentam exatamente a mesma sequência de banda e jitter (comparação justa). O `p1_baseline/` é a referência "rede real estável".
+O servidor real da disciplina é fixo (A=2000 / B=1000 kbps, sem variação) e não é derrubável pelos alunos. Em rede estável as políticas são equivalentes e o failover é impossível sem matar o A. Então as comparações que provam as deficiências (oscilação na Tarefa 2, queda brusca/jitter na Tarefa 3) e o failover usam um servidor mock - o mesmo tipo de cenário que o professor impõe ao vivo (mudar banda, injetar jitter, derrubar o A). O mock é determinístico por `--seed`, então P1/P2/P3 enfrentam exatamente a mesma sequência de banda e jitter (comparação justa). O `p1_baseline/` é a referência "rede real estável".
 
 ## Instalação
 
@@ -56,7 +56,7 @@ Gera os artefatos do relatório: P1 vs P2 vs P3 no controlado e no jitter, mais 
 .venv/bin/python experiment.py --mode all --segments 30 --outdir results
 ```
 
-O playback é em **tempo real** (buffer limitado), então cada run leva ~`segments * 2s`. Use `--segments` menor para iterar mais rápido.
+O playback é em tempo real (buffer limitado), então cada run leva ~`segments * 2s`. Use `--segments` menor para iterar mais rápido.
 
 Modos: `--mode controlled` (oscilação), `--mode jitter` (a P3 ganha), `--mode failover`, `--mode all`, e `--mode live` (ensaio do cenário surpresa, ver abaixo). Opções: `--max-buffer`, `--jitter-profile`, `--jitter-bw-noise`, `--jitter-ms`, `--kill-after`, `--k-sigma`, `--jitter-ref`.
 
@@ -82,7 +82,7 @@ Roda a P3 com o painel ao vivo enquanto um "professor" simulado, numa timeline, 
 Flags do cliente:
 - `--policy {p1,p2,p3}` - política ABR (default `p1`)
 - `--confirm N` - P2: segmentos para confirmar mudança de qualidade (default 3)
-- `--alpha A` `--k-sigma K` `--jitter-ref MS` - parâmetros da P3 (peso EWMA, margem em σ, jitter de referência)
+- `--alpha A` `--k-sigma K` `--jitter-ref MS` `--jitter-floor MS` - parâmetros da P3 (peso EWMA, margem em σ, jitter de referência, piso da zona morta de jitter; defaults α=0.4, k=1, ref=60, floor=20)
 - `--max-buffer S` - teto do buffer em segundos / playback real-time
 - `--quiet` - sem painel por segmento (só eventos + resumo); `--no-color` desliga ANSI
 - `--server URL`, `-n/--segments`, `-o/--output`
@@ -116,51 +116,56 @@ Deficiência conhecida: sob vazão ruidosa perto da fronteira de uma qualidade, 
 
 `RateBasedHysteresisABR`: mesmo estimador do baseline, com duas mudanças:
 
-1. **Slow-start:** começa em 240p e sobe gradualmente (um nível por vez).
-2. **Histerese:** só muda de qualidade após `confirm` (default 3) segmentos consecutivos apontando para a mesma direção. Ruído de vazão que faria o baseline oscilar não acumula confirmação, então a qualidade fica estável.
+1. Slow-start: começa em 240p e sobe gradualmente (um nível por vez).
+2. Histerese: só muda de qualidade após `confirm` (default 3) segmentos consecutivos apontando para a mesma direção. Ruído de vazão que faria o baseline oscilar não acumula confirmação, então a qualidade fica estável.
 
-Resolve a deficiência de oscilação do baseline. **Mas introduz uma fraqueza:** numa queda brusca de banda, a histerese (confirm=3) demora a descer e o buffer drena (ver cenário de jitter abaixo) - fraqueza que a P3 corrige.
+Resolve a deficiência de oscilação do baseline. Mas introduz uma fraqueza: numa queda brusca de banda, a histerese (confirm=3) demora a descer e o buffer drena (ver cenário de jitter abaixo) - fraqueza que a P3 corrige.
 
 ## Política 3 - EWMA + desvio-padrão + penalidade de jitter
 
 `EwmaStdJitterABR`: estimativa conservadora com componente estatístico e sensibilidade a jitter. Três ideias somadas:
 
 ```
-thr_ewma = α·thr + (1-α)·thr_ewma        # EWMA: vazão recente pesa mais (reage rápido)
-σ        = std(janela de vazões)          # volatilidade da rede
-pen_jit  = 1 - min(jitter_ewma/J0, 0.5)   # jitter alto penaliza até 50%
-estimativa = (thr_ewma − k·σ) · pen_jit   # escolhe maior bitrate ≤ estimativa
+thr_ewma = α·thr + (1-α)·thr_ewma             # EWMA: vazão recente pesa mais (reage rápido)
+σ        = std(janela de vazões)               # volatilidade da rede
+excess   = max(0, jitter_ewma − piso)          # zona morta: ignora jitter normal
+pen_jit  = 1 - min(excess/J0, 0.5)             # só o jitter ACIMA do piso penaliza (até 50%)
+estimativa = (thr_ewma − k·σ) · pen_jit        # escolhe maior bitrate ≤ estimativa
 ```
 
-1. **EWMA da vazão** (α=0.4): reage mais rápido a mudanças de banda que a média simples do baseline.
-2. **Margem por desvio-padrão** (k=1): subtrai `k·σ`. Quanto mais volátil a vazão, mais conservadora a escolha - não escolhe uma qualidade que só a média sustenta.
-3. **Penalidade de jitter** (J0=45 ms): quando o jitter EWMA sobe, a entrega fica irregular e a vazão média engana; a estimativa cai proporcionalmente, protegendo o buffer. **É o tratamento explícito de jitter** que a Tarefa 3 exige.
+1. EWMA da vazão (α=0.4): reage mais rápido a mudanças de banda que a média simples do baseline.
+2. Margem por desvio-padrão (k=1): subtrai `k·σ`. Quanto mais volátil a vazão, mais conservadora a escolha - não escolhe uma qualidade que só a média sustenta.
+3. Penalidade de jitter com zona morta (piso=20 ms, J0=60 ms): jitter abaixo do piso é tratado como ruído normal da rede e **não** penaliza; só o excesso acima do piso reduz a estimativa, proporcionalmente, protegendo o buffer. É o tratamento explícito de jitter que a Tarefa 3 exige. **A zona morta é essencial:** sem ela, o jitter saudável de ~18 ms do servidor real já cortava ~40% da estimativa e a P3 ficava presa em 480p enquanto a rede sustentava 720p (a P3 parecia *pior* que o baseline). Com a zona morta a P3 alcança 720p no real e só recua sob jitter genuinamente alto.
 
-Mantém **histerese assimétrica**: sobe devagar (confirm_up=2, evita oscilação como a P2) mas desce rápido (confirm_down=1, protege o buffer na queda). É o que falta na P2.
+Mantém histerese assimétrica: sobe devagar (confirm_up=2, evita oscilação como a P2) mas desce rápido (confirm_down=1, protege o buffer na queda). É o que falta na P2.
 
 ## Análise de deficiências e comparação das 3 políticas
 
-**Cenário 1 - oscilação (`results/p2_controlled/`):** banda ruidosa (`bw-noise=0.22`) perto da fronteira de 480p. Aqui aparece a deficiência do baseline.
+Métrica de QoE (modelo linear de Yin et al. 2015 / MPC, usado na literatura ABR), em kbps: `QoE = bitrate_médio − instabilidade − rebuffer`, onde instabilidade = média de |Δbitrate| (peso 1) e rebuffer = `3000 · stall_total/n` (1 s de stall ≈ perder um segmento na qualidade máxima). Quanto maior, melhor.
+
+Cenário 1 - oscilação (`results/p2_controlled/`): banda ruidosa (`bw-noise=0.22`) perto da fronteira de 480p. Aqui aparece a deficiência do baseline.
 
 | Métrica | P1 | P2 | P3 |
 |---|---|---|---|
-| trocas de qualidade | 7 | 2 | 4 |
+| trocas de qualidade | 7 | 2 | 2 |
 | rebuffers | 0 | 0 | 0 |
-| bitrate médio (kbps) | 653 | 620 | 627 |
+| bitrate médio (kbps) | 653 | 620 | 647 |
+| **QoE (kbps)** | **574** | **603** | **629** |
 
-O baseline (P1) oscila (7 trocas, flapa 480p↔360p quando o ruído cruza a fronteira). P2 e P3 estabilizam (2 e 4 trocas); a P3 fica entre as duas porque o downshift rápido (confirm_down=1) reage a alguns vales - preço que ela paga para vencer no cenário seguinte.
+O baseline (P1) oscila (7 trocas, flapa 480p↔360p quando o ruído cruza a fronteira). P2 e P3 estabilizam (2 trocas cada). A QoE ordena **P3 > P2 > P1**: a P3 fica tão estável quanto a P2 (2 trocas) mas mantém bitrate mais alto (647 vs 620), porque a EWMA aproveita melhor a banda; o P1 é punido pela instabilidade. Este é o cenário onde a ordenação **P3 > P2 > P1** sai limpa por uma métrica única.
 
-**Cenário 2 - jitter / queda brusca (`results/p3_jitter/`):** banda alta e estável (3000 kbps) que despenca para 430 kbps no segmento 10, com jitter alto. Aqui a P3 ganha.
+Cenário 2 - jitter / queda brusca (`results/p3_jitter/`): banda alta e estável (3000 kbps) que despenca para 430 kbps no segmento 10, com jitter alto. Aqui a P3 prova robustez e a P2 colapsa.
 
 | Métrica | P1 | P2 | P3 |
 |---|---|---|---|
-| rebuffers | 2 | 7 | 1 |
-| stall total (s) | 0.47 | 8.79 | 0.06 |
+| rebuffers | 2 | 8 | 1 |
+| stall total (s) | 0.39 | 8.99 | 0.15 |
 | bitrate médio (kbps) | 380 | 390 | 337 |
+| QoE (kbps) | 307 | −543 | 287 |
 
-Na fase estável as três cavalgam 480p. Na queda (seg 10), P1 (média) demora 1-2 segmentos a descer e P2 (histerese) trava em 480p por ~5 segmentos - 480p a 430 kbps leva ~3,3 s/segmento, o buffer drena e estola em cadeia (7 rebuffers, 8,8 s de stall). A P3 reage no mesmo segmento (EWMA + salto do σ) e desce para 360p→240p, sobrevivendo com 1 rebuffer (0,06 s), ao custo de ~10% menos bitrate que o baseline. Em `results/p3_jitter/compare_buffer.png` a P2 fica grudada no threshold de 2 s com a fileira de rebuffers.
+Na fase estável as três cavalgam alto. Na queda (seg 10), P1 (média) demora 1-2 segmentos a descer e P2 (histerese, confirm=3, desce um nível por vez) trava no alto por vários segmentos - o buffer drena e estola em cadeia (8 rebuffers, 9,0 s de stall, QoE despenca para −543). A P3 reage no mesmo segmento (EWMA + salto do σ) e desce rápido, sobrevivendo com 1 rebuffer (0,15 s), ao custo de ~11% menos bitrate. Em `results/p3_jitter/compare_buffer.png` a P2 fica grudada no threshold de 2 s com a fileira de rebuffers.
 
-> Conclusão: a P3 reduziu o rebuffering de 2→1 vs baseline e de 7→1 vs P2, e o stall de 0,47→0,06 s, mantendo bitrate comparável. É robusta nos dois cenários, enquanto P1 falha na queda e P2 na queda também.
+> Conclusão (com dados): **P3 é a melhor política no geral.** No cenário de oscilação a QoE ordena P3 (629) > P2 (603) > P1 (574) de forma monotônica. No cenário de queda/jitter a P3 reduz o rebuffering para 1 (vs P1=2 e P2=8) e o stall para 0,15 s (vs 9,0 s da P2) - a P2 colapsa exatamente na deficiência que ela própria introduziu (histerese lenta na descida), e a P3 a corrige. A P3 é a única que nunca é a pior: vence a oscilação e domina a queda. **Importante (honestidade dos dados):** não existe um cenário *combinado* único que ordene P3 > P2 > P1 monotonicamente, porque as políticas têm trade-offs reais - qualquer queda pune a histerese da P2 (vira a pior), e em oscilação pura o downshift rápido da P3 a faria oscilar. Por isso o veredito usa os dois cenários canônicos, cada um isolando uma deficiência.
 
 ## Failover
 
@@ -170,9 +175,9 @@ Na fase estável as três cavalgam 480p. Na queda (seg 10), P1 (média) demora 1
 
 Failover só é testável num servidor que controlamos (o real não é derrubável; na apresentação quem mata o A é o professor, ao vivo). No cenário do mock (A=1500, B=1000 kbps), com a P3 e derrubando o A no meio do streaming:
 
-- **Tempo:** ~1-2 ms para o health-check achar o B saudável; o segmento é re-baixado no B na mesma iteração.
-- **Buffer suficiente?** Sim - buffer cheio no momento da queda → `can_play=1`, **zero rebuffer** (a linha do evento no CSV mostra `buffer_can_play=1`).
-- **Qualidade após a troca e por quê:** segue na qualidade alta imediatamente após a troca (o buffer cheio dá folga); em seguida a P3 **desce um nível**, pois aprende que o B é mais lento (vazão menor) e o desvio-padrão/EWMA confirmam a queda - adaptação correta à capacidade real do novo servidor.
+- Tempo: ~1-2 ms para o health-check achar o B saudável; o segmento é re-baixado no B na mesma iteração.
+- Buffer suficiente? Sim - buffer cheio no momento da queda → `can_play=1`, zero rebuffer (a linha do evento no CSV mostra `buffer_can_play=1`).
+- Qualidade após a troca e por quê: segue na qualidade alta imediatamente após a troca (o buffer cheio dá folga); em seguida a P3 desce um nível, pois aprende que o B é mais lento (vazão menor) e o desvio-padrão/EWMA confirmam a queda - adaptação correta à capacidade real do novo servidor.
 
 Ver `results/p2_failover/buffer_level.png` (linha vertical no segmento do evento).
 
@@ -189,7 +194,7 @@ O cliente imprime um painel no terminal (stdlib, sem dependências; cores ANSI q
 
 ## Buffer e pacing
 
-`BufferManager`: nível em segundos. `add_segment()` soma `segment_duration_s`; `consume()` subtrai o tempo real decorrido (registra `rebuffer_event` + `stall_duration_s` se o buffer zerar antes). O cliente faz **pacing**: quando o buffer passa de `max_buffer`, espera o playback drenar antes de buscar o próximo segmento (modela playback em tempo real). Sem isso o cliente baixaria tudo de uma vez e o buffer cresceria sem limite, escondendo rebuffer/oscilação.
+`BufferManager`: nível em segundos. `add_segment()` soma `segment_duration_s`; `consume()` subtrai o tempo real decorrido (registra `rebuffer_event` + `stall_duration_s` se o buffer zerar antes). O cliente faz pacing: quando o buffer passa de `max_buffer`, espera o playback drenar antes de buscar o próximo segmento (modela playback em tempo real). Sem isso o cliente baixaria tudo de uma vez e o buffer cresceria sem limite, escondendo rebuffer/oscilação.
 
 ## CSV gerado
 

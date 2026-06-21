@@ -36,7 +36,6 @@ HOST = "127.0.0.1"
 #                  a P2 (histerese) segura 480p.
 DEFAULT_PROFILE = "0:1600,8:1100"
 
-
 def wait_healthy(url, timeout=8):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -47,7 +46,6 @@ def wait_healthy(url, timeout=8):
         except Exception:
             time.sleep(0.2)
     return False
-
 
 def start_server(port, port_a, port_b, bandwidth, jitter, profile, bw_noise=0.0, seed=42):
     cmd = [PY, "server.py", "--id", "A" if port == port_a else "B",
@@ -62,7 +60,6 @@ def start_server(port, port_a, port_b, bandwidth, jitter, profile, bw_noise=0.0,
         raise RuntimeError(f"servidor na porta {port} nao subiu")
     return proc
 
-
 def stop(proc):
     if proc and proc.poll() is None:
         proc.terminate()
@@ -71,30 +68,40 @@ def stop(proc):
         except subprocess.TimeoutExpired:
             proc.kill()
 
-
 def run_client(policy, server_url, segments, output, confirm=3, max_buffer=10.0,
-               k_sigma=1.0, jitter_ref=50.0, alpha=0.4, quiet=True):
+               k_sigma=1.0, jitter_ref=60.0, jitter_floor=20.0, alpha=0.4, quiet=True):
     cmd = [PY, "client.py", "--policy", policy, "--server", server_url,
            "-n", str(segments), "-o", output, "--confirm", str(confirm),
            "--max-buffer", str(max_buffer), "--alpha", str(alpha),
-           "--k-sigma", str(k_sigma), "--jitter-ref", str(jitter_ref)]
+           "--k-sigma", str(k_sigma), "--jitter-ref", str(jitter_ref),
+           "--jitter-floor", str(jitter_floor)]
     if quiet:
         cmd.append("--quiet")
     subprocess.run(cmd, check=True)
-
 
 def load(path):
     with open(path) as f:
         return list(csv.DictReader(f))
 
+# Penalidade de rebuffer na QoE (kbps por segundo de stall). Convencao da
+# literatura (Yin et al. 2015, MPC): 1s de stall custa ~o maior bitrate, ou seja,
+# travar 1s "vale" perder um segmento na qualidade maxima. Aqui o topo e 3000 kbps.
+QOE_REBUFFER_PENALTY = 3000.0
+QOE_SWITCH_PENALTY = 1.0  # peso da instabilidade (kbps por kbps de troca)
 
 def metrics(rows):
     bitrates = [int(r["bitrate_kbps"]) for r in rows]
     switches = sum(1 for i in range(1, len(bitrates)) if bitrates[i] != bitrates[i - 1])
+    switch_mag = sum(abs(bitrates[i] - bitrates[i - 1]) for i in range(1, len(bitrates)))
+    avg_switch = switch_mag / (len(bitrates) - 1) if len(bitrates) > 1 else 0
     rebuffers = sum(int(r["rebuffer_event"]) for r in rows)
     stall = sum(float(r["stall_duration_s"]) for r in rows)
     below = sum(1 for r in rows if int(r["buffer_can_play"]) == 0)
     avg_bitrate = sum(bitrates) / len(bitrates) if bitrates else 0
+    # QoE linear: qualidade media - instabilidade - rebuffering (tudo em kbps).
+    qoe = (avg_bitrate
+           - QOE_SWITCH_PENALTY * avg_switch
+           - QOE_REBUFFER_PENALTY * (stall / len(rows) if rows else 0))
     return {
         "segmentos": len(rows),
         "trocas_qualidade": switches,
@@ -102,13 +109,13 @@ def metrics(rows):
         "stall_total_s": round(stall, 2),
         "seg_buffer_baixo": below,
         "bitrate_medio_kbps": round(avg_bitrate, 0),
+        "qoe_score": round(qoe, 0),
     }
-
 
 def print_table_n(csvs):
     """csvs = {policy: path}. Tabela comparativa lado a lado das politicas."""
     keys = ["segmentos", "trocas_qualidade", "rebuffers", "stall_total_s",
-            "seg_buffer_baixo", "bitrate_medio_kbps"]
+            "seg_buffer_baixo", "bitrate_medio_kbps", "qoe_score"]
     mets = {p: metrics(load(path)) for p, path in csvs.items()}
     labels = [LABELS[p] for p in csvs]
     width = max(len(k) for k in keys)
@@ -119,10 +126,8 @@ def print_table_n(csvs):
         print(f"{k:<{width}} | " + " | ".join(f"{str(mets[p][k]):>8}" for p in csvs))
     return mets
 
-
 def graphs(outdir, *args):
     subprocess.run([PY, "graph.py", *args, "-d", outdir], check=True)
-
 
 def graphs_compare(outdir, csvs, no_jitter=False):
     """Grafico das politicas lado a lado (mesmo cenario)."""
@@ -134,7 +139,6 @@ def graphs_compare(outdir, csvs, no_jitter=False):
         call.append("--no-jitter")
     graphs(outdir, *call)
 
-
 def control(server_url, **params):
     """Bate em /control do mock (banda/jitter ao vivo). Silencioso em falha."""
     q = "&".join(f"{k}={v}" for k, v in params.items())
@@ -143,7 +147,6 @@ def control(server_url, **params):
             r.read()
     except Exception:
         pass
-
 
 def run_scenario_3(args, outdir, profile, bw_noise, jitter, label, max_buffer):
     """Roda P1, P2 e P3 no MESMO cenario: o servidor e reiniciado por politica,
@@ -159,12 +162,12 @@ def run_scenario_3(args, outdir, profile, bw_noise, jitter, label, max_buffer):
             print(f"\n--- {policy} ({label}) ---")
             run_client(policy, f"http://{HOST}:{args.port_a}", args.segments, out,
                        confirm=args.confirm, max_buffer=max_buffer,
-                       k_sigma=args.k_sigma, jitter_ref=args.jitter_ref, alpha=args.alpha)
+                       k_sigma=args.k_sigma, jitter_ref=args.jitter_ref,
+                       jitter_floor=args.jitter_floor, alpha=args.alpha)
         finally:
             stop(srv)
         csvs[policy] = out
     return csvs
-
 
 def run_controlled(args):
     """P1 vs P2 vs P3, banda variavel: a deficiencia de oscilacao do baseline
@@ -177,8 +180,10 @@ def run_controlled(args):
     print(f"\n-> trocas de qualidade: P1={mets['p1']['trocas_qualidade']} "
           f"P2={mets['p2']['trocas_qualidade']} P3={mets['p3']['trocas_qualidade']} "
           f"(P2/P3 estabilizam a oscilacao do baseline)")
+    q1, q2, q3 = (mets[p]["qoe_score"] for p in ("p1", "p2", "p3"))
+    print(f"-> QoE (kbps): P1={q1:.0f}  P2={q2:.0f}  P3={q3:.0f}", end="  ")
+    print("=> P3 > P2 > P1" if q3 > q2 > q1 else "=> (ordem nao monotonica)")
     graphs_compare(d, csvs, no_jitter=True)
-
 
 def run_jitter(args):
     """P1 vs P2 vs P3 com banda volatil + jitter alto: o cenario que prova a P3.
@@ -198,7 +203,6 @@ def run_jitter(args):
         print("-> P3 reduziu rebuffering vs baseline mantendo qualidade comparavel (ver compare_buffer.png).")
     graphs_compare(d, csvs, no_jitter=False)
 
-
 def run_failover(args):
     """Failover so e possivel num servidor que controlamos (o real nao da pra
     derrubar). Roda a P3 (politica final) e derruba o A no meio do streaming."""
@@ -211,7 +215,8 @@ def run_failover(args):
         client = subprocess.Popen(
             [PY, "client.py", "--policy", "p3", "--server", f"http://{HOST}:{args.port_a}",
              "-n", str(args.segments), "-o", csv_fo, "--max-buffer", str(args.max_buffer),
-             "--k-sigma", str(args.k_sigma), "--jitter-ref", str(args.jitter_ref)])
+             "--k-sigma", str(args.k_sigma), "--jitter-ref", str(args.jitter_ref),
+             "--jitter-floor", str(args.jitter_floor)])
         time.sleep(args.kill_after)
         print(f">> derrubando servidor A (porta {args.port_a})")
         stop(srv_a)
@@ -228,7 +233,6 @@ def run_failover(args):
     else:
         print("\n-> Nenhum failover registrado (aumente --kill-after).")
     graphs(d, "-i", csv_fo, "--no-jitter")
-
 
 def run_live(args):
     """ENSAIO do cenario surpresa: o cliente (P3, painel ao vivo) roda contra o
@@ -260,7 +264,8 @@ def run_live(args):
         client = subprocess.Popen(
             [PY, "client.py", "--policy", "p3", "--server", url_a,
              "-n", str(args.segments), "-o", csv_live, "--max-buffer", str(args.max_buffer),
-             "--k-sigma", str(args.k_sigma), "--jitter-ref", str(args.jitter_ref)])
+             "--k-sigma", str(args.k_sigma), "--jitter-ref", str(args.jitter_ref),
+             "--jitter-floor", str(args.jitter_floor)])
         prof = threading.Thread(target=professor, daemon=True)
         prof.start()
         client.wait()
@@ -269,7 +274,6 @@ def run_live(args):
         stop(srv_b)
     graphs(d, "-i", csv_live, "--no-jitter")
     print(f"\n-> CSV e graficos do ensaio em {d}/")
-
 
 def main():
     p = argparse.ArgumentParser(description="Experimentos do Projeto Final (P1/P2/P3 + failover + ensaio ao vivo)")
@@ -282,7 +286,8 @@ def main():
     p.add_argument("--confirm", type=int, default=3, help="P2: confirmacoes para mudar qualidade")
     p.add_argument("--alpha", type=float, default=0.4, help="P3: peso da EWMA de vazao")
     p.add_argument("--k-sigma", type=float, default=1.0, help="P3: margem (k desvios-padrao)")
-    p.add_argument("--jitter-ref", type=float, default=45.0, help="P3: jitter de referencia (ms)")
+    p.add_argument("--jitter-ref", type=float, default=60.0, help="P3: jitter (ms) acima do piso que satura a penalidade")
+    p.add_argument("--jitter-floor", type=float, default=20.0, help="P3: jitter (ms) tratado como ruido normal (zona morta)")
     # cenario controlado
     p.add_argument("--profile", default=DEFAULT_PROFILE, help="banda por segmento (controlado)")
     p.add_argument("--jitter", type=float, default=2.0, help="jitter ms/chunk (controlado/failover)")
