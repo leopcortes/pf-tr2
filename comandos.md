@@ -97,16 +97,8 @@ O `experiment.py` já gera esses gráficos. Para regerar à mão a partir dos CS
 | `--k-sigma K` | (P3) margem conservadora (k·σ) | 1.0 |
 | `--jitter-ref MS` | (P3) jitter acima do piso que satura a penalidade | 60 |
 | `--jitter-floor MS` | (P3) zona morta: jitter abaixo disso não penaliza | 20 |
-| `--quiet` | sem painel por segmento (só eventos + resumo) | - |
-| `--no-color` | desliga cores ANSI | - |
 
-## 6. Métrica QoE (na tabela do experiment.py)
-`QoE = bitrate_médio − 1·média(|Δbitrate|) − 3000·(stall_total/n)`  (kbps; maior = melhor)
-Modelo linear de Yin et al. 2015 / MPC: pune instabilidade (trocas) e rebuffering
-(1 s de stall ≈ perder um segmento na qualidade máxima de 3000 kbps).
-No cenário de oscilação dá P3 (629) > P2 (603) > P1 (574).
-
-## 7. Linha do painel
+## 6. Linha do painel
 ```
 seg 1 │ A │ 480p 600↑│ thr 1257▲ │ buf 3.5✓ │ jit 19 │ ewma1213 -1σ14 x1.00jit = 1199 -> 480p
     │   │    │    │ │      │   │        │ │      │            └ razão da decisão (ewma −kσ ×jit = estimativa)
